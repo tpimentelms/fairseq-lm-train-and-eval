@@ -164,6 +164,9 @@ cython_debug/
 # Mac
 .DS_Store
 
+# wandb
+wandb/
+
 # Project specific
 data/
 checkpoint/
