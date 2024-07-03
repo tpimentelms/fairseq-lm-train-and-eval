@@ -1,0 +1,15 @@
+name: fairseq-lm-train-and-eval
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.10
+  - tqdm
+  - pylint
+  - pandas
+  - pip
+  - pip:
+    - ipdb
+    - sentencepiece
+    - tensorboardX
+    - git+https://github.com/tpimentelms/wiki-tokenizer
