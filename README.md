@@ -1,6 +1,6 @@
-# lang-model-training
+# fairseq-lm-train-and-eval
 
-Train a language model
+Code to train language models using fairseq and evaluate them to get per word surprisals.
 
 ## Install Dependencies
 
@@ -12,6 +12,7 @@ Then activate the environment and install your appropriate version of [PyTorch](
 ```bash
 $ conda install pytorch torchvision cpuonly -c pytorch
 $ # conda install pytorch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 pytorch-cuda=11.7 -c pytorch -c nvidia
+$ # conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
 $ pip install transformers
 $ pip install --force-reinstall charset-normalizer==3.1.0
 ```
