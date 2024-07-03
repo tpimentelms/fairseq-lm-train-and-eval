@@ -1,0 +1,114 @@
+LANGUAGE := es
+VOCAB_SIZE := 32000
+MAX_TOKENS_TRAIN := -1
+DATASET_TRAIN := wiki40b
+DATASET := meco
+TASK := language_modeling
+SEED := 7
+MODEL := transformer
+TOKENIZER := bpe
+
+DATA_DIR_BASE:=data
+DATA_DIR:=$(DATA_DIR_BASE)/$(DATASET)/$(LANGUAGE)
+
+DATA_RAW_DIR:=$(DATA_DIR)/raw
+DATA_RAW_VAL_FILE:=$(DATA_RAW_DIR)/validation.txt
+DATA_RAW_TEST_FILE:=$(DATA_RAW_DIR)/test.txt
+DATA_WIKI40B_RAW_TEST_FILE:=$(DATA_DIR_BASE)/wiki40b/$(LANGUAGE)/raw/test.txt
+
+DATA_DIR_TRAIN:=$(DATA_DIR_BASE)/$(DATASET_TRAIN)/$(LANGUAGE)
+DATA_SENTENCEPIECED_DIR_TRAIN:=$(DATA_DIR_TRAIN)/$(TOKENIZER)/sentencepiece
+DATA_SENTENCEPIECED_MODEL_FILE:=$(DATA_SENTENCEPIECED_DIR_TRAIN)/spm.model
+DATA_SENTENCEPIECED_VAL_FILE:=$(DATA_SENTENCEPIECED_DIR_TRAIN)/validation.txt
+DATA_SUBSAMPLED_DIR:=$(DATA_DIR_TRAIN)/$(TOKENIZER)/subsampled/$(MAX_TOKENS_TRAIN)
+DATA_SUBSAMPLED_TRAIN_FILE:=$(DATA_SUBSAMPLED_DIR)/train.txt
+
+DATA_SENTENCEPIECED_DIR:=$(DATA_DIR)/$(TOKENIZER)/sentencepiece
+DATA_SENTENCEPIECED_TEST_FILE:=$(DATA_SENTENCEPIECED_DIR)/test.txt
+
+ifneq ($(filter $(TOKENIZER),rawwords),)
+	DATA_SRC_VAL_FILE:=$(DATA_RAW_VAL_FILE)
+	DATA_SRC_TEST_FILE:=$(DATA_RAW_TEST_FILE)
+else
+	DATA_SRC_VAL_FILE:=$(DATA_SENTENCEPIECED_VAL_FILE)
+	DATA_SRC_TEST_FILE:=$(DATA_SENTENCEPIECED_TEST_FILE)
+endif
+
+DATA_PREPROCESSED_DIR:=$(DATA_DIR)/$(TOKENIZER)/preprocess/$(MAX_TOKENS_TRAIN)
+DATA_PREPROCESSED_TEST_FILE:=$(DATA_PREPROCESSED_DIR)/test.bin
+
+CHECKPOINT_DIR_BASE:=checkpoint/$(DATASET_TRAIN)
+CHECKPOINT_MODEL_DIR:=$(CHECKPOINT_DIR_BASE)/$(LANGUAGE)/$(TOKENIZER)/$(TASK)/$(MODEL)/$(MAX_TOKENS_TRAIN)
+CHECKPOINT_MODEL_BEST_FILE:=$(CHECKPOINT_MODEL_DIR)/checkpoint_best.pt
+
+RESULTS_DIR_BASE := results
+RESULTS_DIR:=$(RESULTS_DIR_BASE)/$(DATASET)/$(LANGUAGE)/$(TOKENIZER)/$(TASK)/$(MODEL)/$(MAX_TOKENS_TRAIN)
+RESULTS_NTOKENS_FILE:=$(RESULTS_DIR)/n_tokens.tsv
+RESULTS_FREQS_FILE:=$(RESULTS_DIR)/freq_tokens.tsv
+RESULTS_SURPRISALS_FILE:=$(RESULTS_DIR)/surprisals.tsv
+RESULTS_STATS_FILE:=$(RESULTS_DIR)/stats.tsv
+
+PREPROCESS_DATA_FLAGS := $(if $(filter-out $(TOKENIZER), rawwords),,--nwordssrc $(VOCAB_SIZE))
+
+####### Make commands #######
+
+all: get_data sentencepiece_data preprocess_data count_tokens eval_model agg_stats
+
+all_gpu: get_data sentencepiece_data preprocess_data eval_model agg_stats
+
+all_cpu: get_data sentencepiece_data preprocess_data count_tokens
+
+get_data: $(DATA_RAW_TEST_FILE)
+
+ifneq ($(filter $(TOKENIZER),rawwords),)
+sentencepiece_data:
+else
+sentencepiece_data: $(DATA_SENTENCEPIECED_TEST_FILE)
+endif
+
+preprocess_data: $(DATA_PREPROCESSED_TEST_FILE)
+
+# train_model: $(CHECKPOINT_MODEL_LAST_FILE)
+
+count_tokens: $(RESULTS_NTOKENS_FILE) $(RESULTS_FREQS_FILE)
+
+eval_model: $(RESULTS_SURPRISALS_FILE)
+
+agg_stats: $(RESULTS_STATS_FILE)
+
+plot_meco:
+	python src/h03_analysis/plot_xent.py --results-dir $(RESULTS_DIR_BASE) --task $(TASK) --dataset meco --languages 'en' 'fi' 'he' 'it' 'ko' 'no' 'ru' 'tr' --max-tokens -1 1000000000 100000000 10000000 1000000
+# 	python src/h03_analysis/plot_xent.py --results-dir $(RESULTS_DIR_BASE) --task $(TASK) --dataset meco --languages 'en' 'es' 'el' 'nl' 'et' 'fi' 'he' 'it' 'ko' 'no' 'ru' 'tr' --max-tokens -1 1000000000 100000000 10000000 1000000
+
+####### Actual commands #######
+
+$(RESULTS_STATS_FILE): $(RESULTS_SURPRISALS_FILE)
+	mkdir -p $(RESULTS_DIR)
+	python src/h03_analysis/get_lang_stats.py --train-file $(DATA_SUBSAMPLED_TRAIN_FILE) --val-file $(DATA_SRC_VAL_FILE) \
+		--test-file $(DATA_SRC_TEST_FILE) --raw-test-file $(DATA_RAW_TEST_FILE) --surprisals-file $(RESULTS_SURPRISALS_FILE) --tgt-file $(RESULTS_STATS_FILE)
+
+$(RESULTS_NTOKENS_FILE):
+	mkdir -p $(RESULTS_DIR)
+	python src/h03_analysis/get_lang_sizes.py --src-file $(DATA_SUBSAMPLED_TRAIN_FILE) --tgt-file $(RESULTS_NTOKENS_FILE)
+
+$(RESULTS_FREQS_FILE):
+	mkdir -p $(RESULTS_DIR)
+	python src/h03_analysis/get_frequencies.py --per-word --train-file $(DATA_SUBSAMPLED_TRAIN_FILE) --val-file $(DATA_SRC_VAL_FILE) \
+		--test-file $(DATA_SRC_TEST_FILE) --tgt-file $(RESULTS_FREQS_FILE) --tokenizer $(TOKENIZER)
+
+$(RESULTS_SURPRISALS_FILE): $(CHECKPOINT_MODEL_BEST_FILE)
+	mkdir -p $(RESULTS_DIR)
+	python -u src/h02_learn/eval_lm.py $(DATA_PREPROCESSED_DIR) --user-dir src/h02_learn/ --task $(TASK) --path $(CHECKPOINT_MODEL_BEST_FILE) --fp16 --batch-size 32 --tokens-per-sample 512 --context-window 256 --post-process $(TOKENIZER) --sample-break-mode none --results-path  $(RESULTS_SURPRISALS_FILE)
+
+$(DATA_PREPROCESSED_TEST_FILE): $(DATA_SUBSAMPLED_TRAIN_FILE)
+	fairseq-preprocess --only-source  --trainpref $(DATA_SUBSAMPLED_TRAIN_FILE) \
+		--validpref $(DATA_SRC_VAL_FILE) --testpref $(DATA_SRC_TEST_FILE) \
+	    --destdir $(DATA_PREPROCESSED_DIR) --workers 20 $(PREPROCESS_DATA_FLAGS)
+
+$(DATA_SENTENCEPIECED_TEST_FILE): $(DATA_SENTENCEPIECED_MODEL_FILE)
+	mkdir -p $(DATA_SENTENCEPIECED_DIR)
+	python fairseq/scripts/spm_encode.py --model=$(DATA_SENTENCEPIECED_MODEL_FILE) --output_format=piece < $(DATA_RAW_TEST_FILE) > $(DATA_SENTENCEPIECED_TEST_FILE)
+
+$(DATA_WIKI40B_RAW_TEST_FILE):
+	rm -f $(DATA_WIKI40B_RAW_TRAIN_FILE) $(DATA_WIKI40B_RAW_VAL_FILE) $(DATA_WIKI40B_RAW_TEST_FILE)
+	TF_CPP_MIN_LOG_LEVEL=3 tokenize_wiki_40b --language $(LANGUAGE) --tgt-dir $(DATA_RAW_DIR) --break-text-mode document --dont-tokenize
